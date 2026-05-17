@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>מנתח דפי בנק וכרטיסי אשראי</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body class="min-h-screen bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white font-sans">
+
+  <!-- Header -->
+  <header class="border-b border-white/10 bg-white/5 backdrop-blur-sm">
+    <div class="max-w-4xl mx-auto px-6 py-4 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-blue-500 flex items-center justify-center shadow-lg">
+        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold leading-tight">מנתח פיננסי חכם</h1>
+        <p class="text-xs text-blue-300">ניתוח דפי בנק וכרטיסי אשראי בעזרת AI</p>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-4xl mx-auto px-6 py-10 space-y-8">
+
+    <!-- Hero -->
+    <div class="text-center space-y-2">
+      <h2 class="text-3xl font-extrabold tracking-tight">העלה את דפי הבנק שלך</h2>
+      <p class="text-blue-200 text-base">
+        הכלי יזהה חיובים כפולים, עמלות חריגות, חודשים חסרים ויפיק דוח Excel מפורט
+      </p>
+    </div>
+
+    <!-- Upload card -->
+    <div class="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl space-y-5 backdrop-blur-sm">
+
+      <!-- Drop zone -->
+      <div id="drop-zone"
+           class="drop-zone border-2 border-dashed border-blue-400/50 rounded-xl p-10 text-center cursor-pointer
+                  transition-all duration-200 hover:border-blue-400 hover:bg-blue-500/5"
+           onclick="document.getElementById('file-input').click()">
+        <div class="flex flex-col items-center gap-3 pointer-events-none">
+          <div class="w-14 h-14 rounded-full bg-blue-500/20 flex items-center justify-center">
+            <svg class="w-7 h-7 text-blue-400" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round"
+                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
+            </svg>
+          </div>
+          <div>
+            <p class="font-semibold text-base">גרור קבצים לכאן או לחץ לבחירה</p>
+            <p class="text-sm text-blue-300 mt-1">PDF, Excel (.xlsx / .xls), CSV · עד 10MB לקובץ</p>
+          </div>
+        </div>
+        <input id="file-input" type="file" multiple accept=".pdf,.xlsx,.xls,.csv" class="hidden" />
+      </div>
+
+      <!-- File list -->
+      <ul id="file-list" class="space-y-2 hidden"></ul>
+
+      <!-- Analyze button -->
+      <button id="analyze-btn"
+              class="w-full py-3 px-6 rounded-xl font-bold text-base bg-blue-600 hover:bg-blue-500
+                     disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-lg
+                     flex items-center justify-center gap-2"
+              disabled>
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15m-6.3-11.896c.251.023.501.05.75.082M19.8 15l-3-3m3 3l-3 3m-10.8-3l3-3m-3 3l3 3"/>
+        </svg>
+        <span id="btn-label">נתח קבצים</span>
+      </button>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress-section" class="hidden bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="spinner w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+        <span class="font-semibold" id="progress-label">מעלה קבצים...</span>
+      </div>
+      <div class="w-full bg-white/10 rounded-full h-2">
+        <div id="progress-bar" class="h-2 rounded-full bg-blue-500 transition-all duration-500" style="width:10%"></div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="results-section" class="hidden space-y-5">
+
+      <!-- Summary card -->
+      <div class="bg-white/5 border border-white/10 rounded-2xl p-6 shadow-xl">
+        <h3 class="text-lg font-bold mb-3 flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center text-sm">✓</span>
+          סיכום ממצאים
+        </h3>
+        <p id="summary-text" class="text-blue-100 leading-relaxed"></p>
+      </div>
+
+      <!-- Stats row -->
+      <div class="grid grid-cols-2 gap-4" id="stats-row"></div>
+
+      <!-- Download button -->
+      <button id="download-btn"
+              class="w-full py-3 px-6 rounded-xl font-bold text-base bg-green-600 hover:bg-green-500
+                     transition-colors shadow-lg flex items-center justify-center gap-2">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+        </svg>
+        הורד דוח Excel מלא
+      </button>
+    </div>
+
+    <!-- Error -->
+    <div id="error-section" class="hidden bg-red-500/10 border border-red-400/30 rounded-2xl p-5 text-red-300">
+      <p class="font-semibold mb-1">שגיאה בניתוח</p>
+      <p id="error-text" class="text-sm"></p>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-white/10 mt-16 py-5 text-center text-xs text-blue-400/60">
+    מופעל על ידי Claude AI · הקבצים מעובדים בצורה מאובטחת ונמחקים אוטומטית תוך שעה
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
