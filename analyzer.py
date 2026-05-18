@@ -18,30 +18,28 @@ def _get_client() -> anthropic.Anthropic:
 
 SYSTEM_PROMPT = """אתה יועץ פיננסי מומחה המנתח דפי בנק וכרטיסי אשראי בעברית.
 
-חובה לבצע את כל הפעולות הבאות:
+חובה לבצע:
+1. זהה עד 15 ממצאים חשודים (חיובים כפולים, עמלות חריגות, חודשים חסרים, הוצאות חריגות).
+2. סכם הוצאות לפי קטגוריה וחודש — קטגוריות: מזון, דלק, ביטוח, שכר דירה, בילוי, בריאות, קניות, עמלות, הכנסות, אחר.
+3. חלץ עד 80 תנועות מייצגות (העדף חשודות, גדולות, או קבועות). תיאורים קצרים עד 40 תווים.
 
-1. חלץ את כל התנועות הפיננסיות מהקובץ לרשימת "transactions" – כל שורה עם תאריך וסכום היא תנועה.
-2. סווג כל תנועה לקטגוריה (מזון, דלק, ביטוח, שכר דירה, בילוי, בריאות, קניות, עמלות, אחר).
-3. סכם הוצאות לפי קטגוריה וחודש ב-"categories".
-4. זהה ב-"suspicious":
-   - חיובים כפולים – אותו סכום לאותו גורם פעמיים+
-   - עמלות חריגות – עמלות גבוהות או בלתי צפויות
-   - חודשים חסרים בתשלומים קבועים
-   - הוצאות גבוהות משמעותית מהממוצע
+חוקים קריטיים לגודל הפלט:
+- summary: עד 400 תווים
+- suspicious: עד 15 פריטים, description עד 80 תווים
+- transactions: עד 80 פריטים, description עד 40 תווים
+- categories: סכם לפי חודש בלבד (ללא פירוט נוסף)
 
-חוק ברזל: גם אם הנתונים נראים חלקיים – חלץ כל מה שאפשר. אל תחזיר arrays ריקות אם יש נתונים בקובץ.
-
-ענה ב-JSON בלבד, ללא טקסט נוסף, בפורמט המדויק:
+ענה ב-JSON בלבד, ללא טקסט נוסף:
 {
-  "summary": "סיכום ממצאים בעברית",
+  "summary": "סיכום קצר",
   "suspicious": [
-    {"type": "סוג", "description": "תיאור", "amount": 0, "date": "תאריך", "severity": "high"}
+    {"type": "סוג", "description": "תיאור קצר", "amount": 0, "date": "DD/MM/YYYY", "severity": "high"}
   ],
   "categories": {
     "קטגוריה": {"total": 0, "months": {"MM/YYYY": 0}}
   },
   "transactions": [
-    {"date": "DD/MM/YYYY", "description": "תיאור", "amount": 0, "category": "קטגוריה"}
+    {"date": "DD/MM/YYYY", "description": "תיאור קצר", "amount": 0, "category": "קטגוריה"}
   ]
 }
 
@@ -89,10 +87,46 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
         print(f"[ANALYZER] parsed OK — transactions={len(result.get('transactions',[]))}, suspicious={len(result.get('suspicious',[]))}, categories={len(result.get('categories',{}))}")
         return result
     except json.JSONDecodeError as e:
-        print(f"[ANALYZER] JSON parse error: {e}\nRaw: {raw[:500]}")
+        print(f"[ANALYZER] JSON parse error: {e} — attempting repair")
+        repaired = _repair_truncated_json(raw)
+        if repaired:
+            print(f"[ANALYZER] repair OK — transactions={len(repaired.get('transactions',[]))}, suspicious={len(repaired.get('suspicious',[]))}")
+            return repaired
+        print(f"[ANALYZER] repair failed. Raw[:300]: {raw[:300]}")
         return {
             "summary": raw[:500],
             "suspicious": [],
             "categories": {},
             "transactions": [],
         }
+
+
+def _repair_truncated_json(raw: str) -> dict | None:
+    """Try to salvage a JSON that was cut off mid-stream due to token limits."""
+    # Remove the last incomplete item by trimming to the last complete object
+    # Strategy: find the last occurrence of '}' that closes a list item,
+    # then close all open structures.
+    for close_char in ('}', ']'):
+        idx = raw.rfind(close_char)
+        if idx == -1:
+            continue
+        candidate = raw[:idx + 1]
+        # Count unmatched open braces/brackets and close them
+        open_braces = candidate.count('{') - candidate.count('}')
+        open_brackets = candidate.count('[') - candidate.count(']')
+        if open_braces < 0 or open_brackets < 0:
+            continue
+        candidate += '}' * open_braces + ']' * open_brackets
+        # Try adding the minimum closing to make valid JSON
+        for suffix in ['', '}', ']}', ']}}}', ']}]}}']:
+            try:
+                result = json.loads(candidate + suffix)
+                if isinstance(result, dict):
+                    result.setdefault('summary', '')
+                    result.setdefault('suspicious', [])
+                    result.setdefault('categories', {})
+                    result.setdefault('transactions', [])
+                    return result
+            except json.JSONDecodeError:
+                continue
+    return None
