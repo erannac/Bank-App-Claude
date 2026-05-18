@@ -17,43 +17,35 @@ def _get_client() -> anthropic.Anthropic:
 
 
 SYSTEM_PROMPT = """אתה יועץ פיננסי מומחה המנתח דפי בנק וכרטיסי אשראי בעברית.
-תפקידך לזהות:
-1. חיובים כפולים – אותו סכום לאותו גורם באותו חודש פעמיים או יותר
-2. עמלות חריגות – עמלות גבוהות מהרגיל או עמלות בלתי צפויות
-3. חודשים חסרים – תשלומים קבועים שדילגו על חודש מסוים
-4. הוצאות חריגות – הוצאות גבוהות משמעותית מהממוצע
 
-ענה תמיד ב-JSON בלבד ללא כל טקסט נוסף, בפורמט המדויק הבא:
+חובה לבצע את כל הפעולות הבאות:
+
+1. חלץ את כל התנועות הפיננסיות מהקובץ לרשימת "transactions" – כל שורה עם תאריך וסכום היא תנועה.
+2. סווג כל תנועה לקטגוריה (מזון, דלק, ביטוח, שכר דירה, בילוי, בריאות, קניות, עמלות, אחר).
+3. סכם הוצאות לפי קטגוריה וחודש ב-"categories".
+4. זהה ב-"suspicious":
+   - חיובים כפולים – אותו סכום לאותו גורם פעמיים+
+   - עמלות חריגות – עמלות גבוהות או בלתי צפויות
+   - חודשים חסרים בתשלומים קבועים
+   - הוצאות גבוהות משמעותית מהממוצע
+
+חוק ברזל: גם אם הנתונים נראים חלקיים – חלץ כל מה שאפשר. אל תחזיר arrays ריקות אם יש נתונים בקובץ.
+
+ענה ב-JSON בלבד, ללא טקסט נוסף, בפורמט המדויק:
 {
-  "summary": "סיכום קצר של הממצאים העיקריים בעברית",
+  "summary": "סיכום ממצאים בעברית",
   "suspicious": [
-    {
-      "type": "סוג הבעיה",
-      "description": "תיאור מפורט",
-      "amount": 0,
-      "date": "תאריך אם ידוע",
-      "severity": "high"
-    }
+    {"type": "סוג", "description": "תיאור", "amount": 0, "date": "תאריך", "severity": "high"}
   ],
   "categories": {
-    "שם קטגוריה": {
-      "total": 0,
-      "months": {"01/2025": 0}
-    }
+    "קטגוריה": {"total": 0, "months": {"MM/YYYY": 0}}
   },
   "transactions": [
-    {
-      "date": "תאריך",
-      "description": "תיאור",
-      "amount": 0,
-      "category": "קטגוריה"
-    }
+    {"date": "DD/MM/YYYY", "description": "תיאור", "amount": 0, "category": "קטגוריה"}
   ]
 }
 
-severity חייב להיות אחד מ: "high", "medium", "low".
-אם אין תנועות חשודות, החזר רשימה ריקה.
-אם אין קטגוריות, החזר אובייקט ריק.
+severity: "high" / "medium" / "low" בלבד.
 """
 
 MAX_CONTENT_CHARS = 80_000
@@ -68,10 +60,12 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
     if len(combined) > MAX_CONTENT_CHARS:
         combined = combined[:MAX_CONTENT_CHARS] + "\n\n[... תוכן נחתך בגלל אורך ...]"
 
+    print(f"[ANALYZER] sending {len(combined)} chars to Claude. Preview:\n{combined[:1000]}\n---")
+
     client = _get_client()
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=4096,
+        max_tokens=8096,
         system=SYSTEM_PROMPT,
         messages=[
             {
@@ -82,6 +76,7 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
     )
 
     raw = message.content[0].text.strip()
+    print(f"[ANALYZER] Claude raw response ({len(raw)} chars):\n{raw[:2000]}\n---")
 
     # Strip markdown code fences if present
     if "```json" in raw:
@@ -90,8 +85,11 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
         raw = raw.split("```", 1)[1].split("```", 1)[0].strip()
 
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
+        result = json.loads(raw)
+        print(f"[ANALYZER] parsed OK — transactions={len(result.get('transactions',[]))}, suspicious={len(result.get('suspicious',[]))}, categories={len(result.get('categories',{}))}")
+        return result
+    except json.JSONDecodeError as e:
+        print(f"[ANALYZER] JSON parse error: {e}\nRaw: {raw[:500]}")
         return {
             "summary": raw[:500],
             "suspicious": [],
