@@ -144,7 +144,8 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
         months_data = cat_data.get("months", {})
         is_income = "הכנסה" in cat_name
 
-        bg = INCOME_BG if is_income else (ROW_ALT if r % 2 == 0 else WHITE)
+        bg = ROW_ALT if r % 2 == 0 else WHITE
+        amount_color = "1A56DB" if is_income else "000000"  # blue for income, black for expense
 
         # Category name
         name_cell = ws.cell(row=r, column=1, value=cat_name)
@@ -159,7 +160,6 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
             if raw_val is not None:
                 try:
                     amount = float(raw_val)
-                    # Expenses negative, income positive
                     if not is_income and amount > 0:
                         amount = -amount
                     row_total += amount
@@ -170,6 +170,7 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
 
             cell = ws.cell(row=r, column=col_idx, value=amount)
             cell.fill = PatternFill(fill_type="solid", fgColor=bg)
+            cell.font = Font(name="Arial", size=10, color=amount_color)
             cell.border = _thin_border()
             cell.alignment = Alignment(horizontal="center", vertical="center")
             if isinstance(amount, float):
@@ -178,7 +179,7 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
         # Total column
         total_cell = ws.cell(row=r, column=num_cols, value=round(row_total, 2) if row_total else "")
         total_cell.fill = PatternFill(fill_type="solid", fgColor=bg)
-        total_cell.font = Font(bold=True, name="Arial", size=10)
+        total_cell.font = Font(bold=True, name="Arial", size=10, color=amount_color)
         total_cell.border = _thin_border()
         total_cell.alignment = Alignment(horizontal="center", vertical="center")
         if isinstance(row_total, float):
@@ -212,7 +213,7 @@ def _sheet_transactions(wb: Workbook, analysis: dict) -> None:
         except (ValueError, TypeError):
             amount = raw_amount
 
-        bg = INCOME_BG if is_income else (ROW_ALT if r % 2 == 0 else WHITE)
+        bg = ROW_ALT if r % 2 == 0 else WHITE
 
         for col, v in enumerate([tx.get("date", ""), tx.get("description", ""), amount, cat], 1):
             cell = ws.cell(row=r, column=col, value=v)
@@ -220,6 +221,7 @@ def _sheet_transactions(wb: Workbook, analysis: dict) -> None:
             cell.border = _thin_border()
             if col == 3 and isinstance(v, float):
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
+                cell.font = Font(name="Arial", size=10, color="1A56DB" if is_income else "000000")
 
     _auto_width(ws)
 
