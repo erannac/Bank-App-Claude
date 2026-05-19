@@ -1,11 +1,12 @@
 import json
 import os
 import shutil
+import threading
 import uuid
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
 from werkzeug.utils import secure_filename
 
 from analyzer import analyze_statements
@@ -20,6 +21,8 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
 UPLOAD_BASE = os.path.join(os.path.dirname(__file__), "uploads")
 ALLOWED_EXTENSIONS = {"pdf", "xlsx", "xls", "csv"}
+
+os.makedirs(UPLOAD_BASE, exist_ok=True)
 
 
 def _allowed(filename: str) -> bool:
@@ -65,6 +68,12 @@ def _cleanup_old() -> None:
             pass
 
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(f"[APP] unhandled exception: {e}")
+    return jsonify({"error": f"שגיאת שרת: {type(e).__name__}: {e}"}), 500
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -87,7 +96,10 @@ def upload():
     saved: list[str] = []
     for f in files:
         if f and _allowed(f.filename):
-            path = os.path.join(upload_dir, secure_filename(f.filename))
+            fname = secure_filename(f.filename)
+            if not fname:
+                continue
+            path = os.path.join(upload_dir, fname)
             f.save(path)
             saved.append(path)
 
@@ -95,30 +107,51 @@ def upload():
         shutil.rmtree(upload_dir, ignore_errors=True)
         return jsonify({"error": "לא נמצאו קבצים תקינים (PDF / Excel / CSV)"}), 400
 
-    # Run analysis synchronously so gunicorn's graceful shutdown waits for us
-    try:
-        parsed = [
-            {"filename": os.path.basename(p), "content": parse_file(p)}
-            for p in saved
-        ]
-        analysis = analyze_statements(parsed)
-        report_path = os.path.join(upload_dir, "report.xlsx")
-        generate_report(analysis, report_path)
+    result_box: dict = {}
+    done_event = threading.Event()
 
-        result = {
-            "status": "done",
-            "report_id": report_id,
-            "summary": analysis.get("summary", ""),
-            "suspicious_count": len(analysis.get("suspicious", [])),
-        }
-        _write_status(report_id, result)
-        print(f"[APP] {report_id[:8]} done")
-        return jsonify(result)
+    def worker() -> None:
+        try:
+            parsed = [
+                {"filename": os.path.basename(p), "content": parse_file(p)}
+                for p in saved
+            ]
+            analysis = analyze_statements(parsed)
+            report_path = os.path.join(upload_dir, "report.xlsx")
+            generate_report(analysis, report_path)
+            data = {
+                "status": "done",
+                "report_id": report_id,
+                "summary": analysis.get("summary", ""),
+                "suspicious_count": len(analysis.get("suspicious", [])),
+            }
+            _write_status(report_id, data)
+            result_box["ok"] = data
+            print(f"[APP] {report_id[:8]} done")
+        except Exception as exc:
+            print(f"[APP] {report_id[:8]} error: {exc}")
+            result_box["err"] = str(exc)
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        finally:
+            done_event.set()
 
-    except Exception as exc:
-        print(f"[APP] {report_id[:8]} error: {exc}")
-        shutil.rmtree(upload_dir, ignore_errors=True)
-        return jsonify({"error": str(exc)}), 500
+    # daemon=False so the thread isn't killed during gunicorn graceful shutdown
+    threading.Thread(target=worker, daemon=False).start()
+
+    def stream():
+        # Send a newline every 5 s to keep the connection alive through proxies
+        while not done_event.wait(timeout=5):
+            yield b"\n"
+        if "err" in result_box:
+            yield json.dumps({"error": result_box["err"]}, ensure_ascii=False).encode()
+        else:
+            yield json.dumps(result_box["ok"], ensure_ascii=False).encode()
+
+    return Response(
+        stream_with_context(stream()),
+        content_type="application/json; charset=utf-8",
+        headers={"X-Accel-Buffering": "no"},
+    )
 
 
 @app.route("/download/<report_id>")
@@ -138,5 +171,4 @@ def download(report_id: str):
 
 
 if __name__ == "__main__":
-    os.makedirs(UPLOAD_BASE, exist_ok=True)
     app.run(debug=True, host="0.0.0.0", port=5000)
