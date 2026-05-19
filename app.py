@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import threading
@@ -21,25 +22,52 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 UPLOAD_BASE = os.path.join(os.path.dirname(__file__), "uploads")
 ALLOWED_EXTENSIONS = {"pdf", "xlsx", "xls", "csv"}
 
-# In-memory job store  {report_id: {...}}
-_jobs: dict[str, dict] = {}
-_lock = threading.Lock()
-
 
 def _allowed(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _job_dir(report_id: str) -> str:
+    return os.path.join(UPLOAD_BASE, report_id)
+
+
+def _status_path(report_id: str) -> str:
+    return os.path.join(_job_dir(report_id), "status.json")
+
+
+def _write_status(report_id: str, data: dict) -> None:
+    path = _status_path(report_id)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _read_status(report_id: str) -> dict | None:
+    path = _status_path(report_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 def _cleanup_old() -> None:
-    cutoff = datetime.now() - timedelta(hours=1)
-    with _lock:
-        stale = [rid for rid, j in _jobs.items() if j["created_at"] < cutoff]
-    for rid in stale:
-        with _lock:
-            job = _jobs.pop(rid, {})
-        upload_dir = job.get("upload_dir", "")
-        if upload_dir and os.path.isdir(upload_dir):
-            shutil.rmtree(upload_dir, ignore_errors=True)
+    cutoff = datetime.now() - timedelta(hours=2)
+    if not os.path.isdir(UPLOAD_BASE):
+        return
+    for rid in os.listdir(UPLOAD_BASE):
+        job_dir = os.path.join(UPLOAD_BASE, rid)
+        if not os.path.isdir(job_dir):
+            continue
+        try:
+            mtime = datetime.fromtimestamp(os.path.getmtime(job_dir))
+            if mtime < cutoff:
+                shutil.rmtree(job_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -58,7 +86,7 @@ def upload():
         return jsonify({"error": "לא נבחרו קבצים"}), 400
 
     report_id = str(uuid.uuid4())
-    upload_dir = os.path.join(UPLOAD_BASE, report_id)
+    upload_dir = _job_dir(report_id)
     os.makedirs(upload_dir, exist_ok=True)
 
     saved: list[str] = []
@@ -72,29 +100,21 @@ def upload():
         shutil.rmtree(upload_dir, ignore_errors=True)
         return jsonify({"error": "לא נמצאו קבצים תקינים (PDF / Excel / CSV)"}), 400
 
-    with _lock:
-        _jobs[report_id] = {
-            "status": "processing",
-            "path": None,
-            "error": None,
-            "summary": "",
-            "suspicious_count": 0,
-            "upload_dir": upload_dir,
-            "created_at": datetime.now(),
-        }
+    _write_status(report_id, {"status": "processing"})
 
-    threading.Thread(target=_run_analysis, args=(report_id, saved, upload_dir), daemon=True).start()
+    threading.Thread(
+        target=_run_analysis, args=(report_id, saved, upload_dir), daemon=True
+    ).start()
     return jsonify({"report_id": report_id})
 
 
 @app.route("/status/<report_id>")
 def status(report_id: str):
-    with _lock:
-        job = _jobs.get(report_id)
+    job = _read_status(report_id)
     if job is None:
         return jsonify({"error": "לא נמצא"}), 404
     return jsonify({
-        "status": job["status"],
+        "status": job.get("status"),
         "error": job.get("error"),
         "summary": job.get("summary", ""),
         "suspicious_count": job.get("suspicious_count", 0),
@@ -103,14 +123,16 @@ def status(report_id: str):
 
 @app.route("/download/<report_id>")
 def download(report_id: str):
-    with _lock:
-        job = _jobs.get(report_id)
+    job = _read_status(report_id)
     if job is None:
         return jsonify({"error": "לא נמצא"}), 404
-    if job["status"] != "done" or not job.get("path"):
+    if job.get("status") != "done":
         return jsonify({"error": "הדוח עדיין לא מוכן"}), 400
+    report_path = os.path.join(_job_dir(report_id), "report.xlsx")
+    if not os.path.exists(report_path):
+        return jsonify({"error": "קובץ הדוח לא נמצא"}), 404
     return send_file(
-        job["path"],
+        report_path,
         as_attachment=True,
         download_name="bank_analysis_report.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -129,16 +151,15 @@ def _run_analysis(report_id: str, saved_paths: list[str], upload_dir: str) -> No
         report_path = os.path.join(upload_dir, "report.xlsx")
         generate_report(analysis, report_path)
 
-        with _lock:
-            _jobs[report_id].update({
-                "status": "done",
-                "path": report_path,
-                "summary": analysis.get("summary", ""),
-                "suspicious_count": len(analysis.get("suspicious", [])),
-            })
+        _write_status(report_id, {
+            "status": "done",
+            "summary": analysis.get("summary", ""),
+            "suspicious_count": len(analysis.get("suspicious", [])),
+        })
+        print(f"[APP] job {report_id[:8]} done — report written to disk")
     except Exception as exc:
-        with _lock:
-            _jobs[report_id].update({"status": "error", "error": str(exc)})
+        print(f"[APP] job {report_id[:8]} error: {exc}")
+        _write_status(report_id, {"status": "error", "error": str(exc)})
 
 
 if __name__ == "__main__":
