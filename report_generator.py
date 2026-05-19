@@ -159,13 +159,19 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
             if raw_val is not None:
                 try:
                     amount = float(raw_val)
+                    # Force correct sign: income positive, expense negative
+                    if is_income:
+                        amount = abs(amount)
+                    else:
+                        amount = -abs(amount)
                     row_total += amount
                 except (ValueError, TypeError):
                     amount = raw_val
             else:
                 amount = ""
 
-            font_color = "1A56DB" if isinstance(amount, float) and amount > 0 else "000000"
+            # Blue for income, red for expense
+            font_color = "1A56DB" if is_income else "C0392B"
             cell = ws.cell(row=r, column=col_idx, value=amount)
             cell.fill = PatternFill(fill_type="solid", fgColor=bg)
             cell.font = Font(name="Arial", size=10, color=font_color)
@@ -176,7 +182,7 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
 
         # Total column
         total_val = round(row_total, 2) if row_total else ""
-        total_color = "1A56DB" if isinstance(total_val, float) and total_val > 0 else "000000"
+        total_color = "1A56DB" if is_income else "C0392B"
         total_cell = ws.cell(row=r, column=num_cols, value=total_val)
         total_cell.fill = PatternFill(fill_type="solid", fgColor=bg)
         total_cell.font = Font(bold=True, name="Arial", size=10, color=total_color)
