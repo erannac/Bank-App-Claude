@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import threading
 import uuid
 from datetime import datetime, timedelta
 
@@ -31,12 +30,8 @@ def _job_dir(report_id: str) -> str:
     return os.path.join(UPLOAD_BASE, report_id)
 
 
-def _status_path(report_id: str) -> str:
-    return os.path.join(_job_dir(report_id), "status.json")
-
-
 def _write_status(report_id: str, data: dict) -> None:
-    path = _status_path(report_id)
+    path = os.path.join(_job_dir(report_id), "status.json")
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False)
@@ -44,7 +39,7 @@ def _write_status(report_id: str, data: dict) -> None:
 
 
 def _read_status(report_id: str) -> dict | None:
-    path = _status_path(report_id)
+    path = os.path.join(_job_dir(report_id), "status.json")
     if not os.path.exists(path):
         return None
     try:
@@ -100,34 +95,37 @@ def upload():
         shutil.rmtree(upload_dir, ignore_errors=True)
         return jsonify({"error": "לא נמצאו קבצים תקינים (PDF / Excel / CSV)"}), 400
 
-    _write_status(report_id, {"status": "processing"})
+    # Run analysis synchronously so gunicorn's graceful shutdown waits for us
+    try:
+        parsed = [
+            {"filename": os.path.basename(p), "content": parse_file(p)}
+            for p in saved
+        ]
+        analysis = analyze_statements(parsed)
+        report_path = os.path.join(upload_dir, "report.xlsx")
+        generate_report(analysis, report_path)
 
-    threading.Thread(
-        target=_run_analysis, args=(report_id, saved, upload_dir), daemon=True
-    ).start()
-    return jsonify({"report_id": report_id})
+        result = {
+            "status": "done",
+            "report_id": report_id,
+            "summary": analysis.get("summary", ""),
+            "suspicious_count": len(analysis.get("suspicious", [])),
+        }
+        _write_status(report_id, result)
+        print(f"[APP] {report_id[:8]} done")
+        return jsonify(result)
 
-
-@app.route("/status/<report_id>")
-def status(report_id: str):
-    job = _read_status(report_id)
-    if job is None:
-        return jsonify({"error": "לא נמצא"}), 404
-    return jsonify({
-        "status": job.get("status"),
-        "error": job.get("error"),
-        "summary": job.get("summary", ""),
-        "suspicious_count": job.get("suspicious_count", 0),
-    })
+    except Exception as exc:
+        print(f"[APP] {report_id[:8]} error: {exc}")
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/download/<report_id>")
 def download(report_id: str):
     job = _read_status(report_id)
-    if job is None:
+    if job is None or job.get("status") != "done":
         return jsonify({"error": "לא נמצא"}), 404
-    if job.get("status") != "done":
-        return jsonify({"error": "הדוח עדיין לא מוכן"}), 400
     report_path = os.path.join(_job_dir(report_id), "report.xlsx")
     if not os.path.exists(report_path):
         return jsonify({"error": "קובץ הדוח לא נמצא"}), 404
@@ -137,29 +135,6 @@ def download(report_id: str):
         download_name="bank_analysis_report.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
-
-# ── Background worker ─────────────────────────────────────────────────────────
-
-def _run_analysis(report_id: str, saved_paths: list[str], upload_dir: str) -> None:
-    try:
-        parsed = [
-            {"filename": os.path.basename(p), "content": parse_file(p)}
-            for p in saved_paths
-        ]
-        analysis = analyze_statements(parsed)
-        report_path = os.path.join(upload_dir, "report.xlsx")
-        generate_report(analysis, report_path)
-
-        _write_status(report_id, {
-            "status": "done",
-            "summary": analysis.get("summary", ""),
-            "suspicious_count": len(analysis.get("suspicious", [])),
-        })
-        print(f"[APP] job {report_id[:8]} done — report written to disk")
-    except Exception as exc:
-        print(f"[APP] job {report_id[:8]} error: {exc}")
-        _write_status(report_id, {"status": "error", "error": str(exc)})
 
 
 if __name__ == "__main__":
