@@ -145,7 +145,6 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
         is_income = "הכנסה" in cat_name
 
         bg = ROW_ALT if r % 2 == 0 else WHITE
-        amount_color = "1A56DB" if is_income else "000000"  # blue for income, black for expense
 
         # Category name
         name_cell = ws.cell(row=r, column=1, value=cat_name)
@@ -160,29 +159,30 @@ def _sheet_categories(wb: Workbook, analysis: dict) -> None:
             if raw_val is not None:
                 try:
                     amount = float(raw_val)
-                    if not is_income and amount > 0:
-                        amount = -amount
                     row_total += amount
                 except (ValueError, TypeError):
                     amount = raw_val
             else:
                 amount = ""
 
+            font_color = "1A56DB" if isinstance(amount, float) and amount > 0 else "000000"
             cell = ws.cell(row=r, column=col_idx, value=amount)
             cell.fill = PatternFill(fill_type="solid", fgColor=bg)
-            cell.font = Font(name="Arial", size=10, color=amount_color)
+            cell.font = Font(name="Arial", size=10, color=font_color)
             cell.border = _thin_border()
             cell.alignment = Alignment(horizontal="center", vertical="center")
             if isinstance(amount, float):
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
 
         # Total column
-        total_cell = ws.cell(row=r, column=num_cols, value=round(row_total, 2) if row_total else "")
+        total_val = round(row_total, 2) if row_total else ""
+        total_color = "1A56DB" if isinstance(total_val, float) and total_val > 0 else "000000"
+        total_cell = ws.cell(row=r, column=num_cols, value=total_val)
         total_cell.fill = PatternFill(fill_type="solid", fgColor=bg)
-        total_cell.font = Font(bold=True, name="Arial", size=10, color=amount_color)
+        total_cell.font = Font(bold=True, name="Arial", size=10, color=total_color)
         total_cell.border = _thin_border()
         total_cell.alignment = Alignment(horizontal="center", vertical="center")
-        if isinstance(row_total, float):
+        if isinstance(total_val, float):
             total_cell.number_format = '#,##0.00;[Red]-#,##0.00'
 
     _auto_width(ws)
@@ -203,13 +203,10 @@ def _sheet_transactions(wb: Workbook, analysis: dict) -> None:
 
     for r, tx in enumerate(analysis.get("transactions", []), 4):
         cat = tx.get("category", "")
-        is_income = "הכנסה" in cat
         raw_amount = tx.get("amount", "")
 
         try:
             amount = float(raw_amount)
-            if not is_income and amount > 0:
-                amount = -amount
         except (ValueError, TypeError):
             amount = raw_amount
 
@@ -221,7 +218,7 @@ def _sheet_transactions(wb: Workbook, analysis: dict) -> None:
             cell.border = _thin_border()
             if col == 3 and isinstance(v, float):
                 cell.number_format = '#,##0.00;[Red]-#,##0.00'
-                cell.font = Font(name="Arial", size=10, color="1A56DB" if is_income else "000000")
+                cell.font = Font(name="Arial", size=10, color="1A56DB" if v > 0 else "000000")
 
     _auto_width(ws)
 
