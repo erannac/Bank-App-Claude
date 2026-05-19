@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import anthropic
 from dotenv import load_dotenv
@@ -18,55 +19,35 @@ def _get_client() -> anthropic.Anthropic:
 
 SYSTEM_PROMPT = """אתה יועץ פיננסי מומחה המנתח דפי בנק וכרטיסי אשראי בעברית.
 
-=== כללי סימון סכומים (חובה) ===
-- הוצאה (כסף יוצא מהחשבון): סכום שלילי, למשל -250.50
-- הכנסה (כסף נכנס לחשבון): סכום חיובי, למשל 5000.00
-חוק זה חל על שלושת המקטעים: suspicious, categories, transactions.
+סימון סכומים (חובה לכל המקטעים):
+- הוצאה: סכום שלילי, למשל -250.50
+- הכנסה: סכום חיובי, למשל 5000.00
 
-=== תת-קטגוריות (חובה) ===
-חייב להשתמש בתת-קטגוריות מפורטות. אסור להשתמש בשמות גנריים כמו "קניות" או "אחר" בלבד.
-רשימת התת-קטגוריות המותרות (הוסף לפי הצורך):
+תת-קטגוריות (חובה — אסור "קניות" סתם, חייב פירוט):
+הוצאות: מזון-סופרמרקט, מזון-מסעדות, מזון-קפה, מזון-משלוחים,
+תחבורה-דלק, תחבורה-חניה, תחבורה-ציבורית, תחבורה-טיסות,
+קניות-אופנה, קניות-אלקטרוניקה, קניות-בית, קניות-ילדים, קניות-מתנות,
+בריאות-קופת-חולים, בריאות-תרופות, בריאות-רופא, בריאות-ספורט,
+ביטוח-רכב, ביטוח-בריאות, ביטוח-חיים, ביטוח-דירה,
+בילוי-מנויים, בילוי-נסיעות, בילוי-קולנוע,
+דיור-שכירות, דיור-משכנתא, דיור-ועד-בית,
+חשמל, גז, מים, ארנונה, תקשורת-סלולר, תקשורת-אינטרנט,
+חינוך, עמלות-בנק, עמלות-כרטיס, עמלות-מטח, ריבית,
+פנסיה, קרן-השתלמות, המרת-מטח, העברות, אחר.
+הכנסות: הכנסה-משכורת, הכנסה-עצמאי, הכנסה-קצבה, הכנסה-ילדים, הכנסה-אחרת.
 
-הוצאות:
-- מזון-סופרמרקט, מזון-מסעדות, מזון-קפה, מזון-משלוחים
-- תחבורה-דלק, תחבורה-חניה, תחבורה-ציבורית, תחבורה-מונית, תחבורה-טיסות
-- קניות-אופנה, קניות-אלקטרוניקה, קניות-רהיטים, קניות-ספרים, קניות-ילדים, קניות-מתנות
-- בריאות-קופת-חולים, בריאות-תרופות, בריאות-רופא-פרטי, בריאות-ספורט
-- ביטוח-רכב, ביטוח-בריאות, ביטוח-חיים, ביטוח-דירה
-- בילוי-קולנוע, בילוי-ספורט, בילוי-נסיעות, בילוי-מנויים
-- תשלומי-דירה-שכירות, תשלומי-דירה-משכנתא, תשלומי-דירה-ועד-בית
-- חשמל, גז, מים, ארנונה
-- תקשורת-סלולר, תקשורת-אינטרנט, תקשורת-טלוויזיה
-- חינוך-שכר-לימוד, חינוך-גן, חינוך-קורסים
-- עמלות-בנק, עמלות-כרטיס-אשראי, עמלות-מטח, ריבית
-- פנסיה, קרן-השתלמות, ביטוח-לאומי
-- העברות-לאחרים, המרת-מטח
+הנחיות:
+1. עד 15 ממצאים חשודים (suspicious).
+2. categories: תת-קטגוריה אחת לשורה, סכום לפי חודש.
+3. עד 60 תנועות (transactions), description עד 35 תווים.
 
-הכנסות:
-- הכנסה-משכורת, הכנסה-עצמאי, הכנסה-קצבה, הכנסה-ילדים, הכנסה-שכר-דירה, הכנסה-אחרת
+גבולות: summary≤300 תווים, suspicious.description≤60 תווים.
 
-=== הנחיות ===
-1. זהה עד 15 ממצאים חשודים.
-2. סכם לפי תת-קטגוריה וחודש — כל תת-קטגוריה שורה נפרדת.
-3. חלץ עד 80 תנועות מייצגות, description עד 40 תווים.
-
-גבולות גודל:
-- summary: עד 400 תווים
-- suspicious: עד 15, description עד 80 תווים
-- transactions: עד 80, description עד 40 תווים
-
-ענה ב-JSON בלבד, ללא טקסט נוסף:
-{
-  "summary": "סיכום",
-  "suspicious": [{"type":"","description":"","amount":-100,"date":"DD/MM/YYYY","severity":"high"}],
-  "categories": {"תת-קטגוריה": {"total": -500, "months": {"MM/YYYY": -500}}},
-  "transactions": [{"date":"DD/MM/YYYY","description":"","amount":-50,"category":"תת-קטגוריה"}]
-}
-
-severity: "high"/"medium"/"low" בלבד.
+ענה JSON בלבד:
+{"summary":"","suspicious":[{"type":"","description":"","amount":-100,"date":"DD/MM/YYYY","severity":"high"}],"categories":{"תת-קטגוריה":{"total":-500,"months":{"MM/YYYY":-500}}},"transactions":[{"date":"DD/MM/YYYY","description":"","amount":-50,"category":"תת-קטגוריה"}]}
 """
 
-MAX_CONTENT_CHARS = 80_000
+MAX_CONTENT_CHARS = 60_000
 
 
 def analyze_statements(parsed_files: list[dict]) -> dict:
@@ -76,27 +57,22 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
     ]
     combined = "\n\n".join(parts)
     if len(combined) > MAX_CONTENT_CHARS:
-        combined = combined[:MAX_CONTENT_CHARS] + "\n\n[... תוכן נחתך בגלל אורך ...]"
+        combined = combined[:MAX_CONTENT_CHARS] + "\n\n[... תוכן נחתך ...]"
 
-    print(f"[ANALYZER] sending {len(combined)} chars to Claude. Preview:\n{combined[:1000]}\n---")
+    print(f"[ANALYZER] sending {len(combined)} chars to Claude.")
 
     client = _get_client()
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=8096,
+        max_tokens=8192,
         system=SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"נתח את דפי הבנק/כרטיס האשראי הבאים:\n\n{combined}",
-            }
-        ],
+        messages=[{"role": "user", "content": f"נתח:\n\n{combined}"}],
     )
 
     raw = message.content[0].text.strip()
-    print(f"[ANALYZER] Claude raw response ({len(raw)} chars):\n{raw[:2000]}\n---")
+    print(f"[ANALYZER] response {len(raw)} chars. stop_reason={message.stop_reason}")
 
-    # Strip markdown code fences if present
+    # Strip markdown fences
     if "```json" in raw:
         raw = raw.split("```json", 1)[1].split("```", 1)[0].strip()
     elif "```" in raw:
@@ -104,49 +80,42 @@ def analyze_statements(parsed_files: list[dict]) -> dict:
 
     try:
         result = json.loads(raw)
-        print(f"[ANALYZER] parsed OK — transactions={len(result.get('transactions',[]))}, suspicious={len(result.get('suspicious',[]))}, categories={len(result.get('categories',{}))}")
+        _log_result(result)
         return result
     except json.JSONDecodeError as e:
-        print(f"[ANALYZER] JSON parse error: {e} — attempting repair")
+        print(f"[ANALYZER] JSON error: {e} — attempting repair")
         repaired = _repair_truncated_json(raw)
         if repaired:
-            print(f"[ANALYZER] repair OK — transactions={len(repaired.get('transactions',[]))}, suspicious={len(repaired.get('suspicious',[]))}")
+            _log_result(repaired)
             return repaired
-        print(f"[ANALYZER] repair failed. Raw[:300]: {raw[:300]}")
-        return {
-            "summary": raw[:500],
-            "suspicious": [],
-            "categories": {},
-            "transactions": [],
-        }
+        print(f"[ANALYZER] repair failed.")
+        return {"summary": raw[:400], "suspicious": [], "categories": {}, "transactions": []}
+
+
+def _log_result(r: dict) -> None:
+    print(f"[ANALYZER] OK — tx={len(r.get('transactions', []))}, "
+          f"sus={len(r.get('suspicious', []))}, cat={len(r.get('categories', {}))}")
 
 
 def _repair_truncated_json(raw: str) -> dict | None:
-    """Try to salvage a JSON that was cut off mid-stream due to token limits."""
-    # Remove the last incomplete item by trimming to the last complete object
-    # Strategy: find the last occurrence of '}' that closes a list item,
-    # then close all open structures.
-    for close_char in ('}', ']'):
-        idx = raw.rfind(close_char)
-        if idx == -1:
-            continue
-        candidate = raw[:idx + 1]
-        # Count unmatched open braces/brackets and close them
+    """Salvage JSON cut off mid-stream by scanning backwards for the last complete object."""
+    # Walk backwards through every '}' position and try to close the structure
+    positions = [i for i, c in enumerate(raw) if c == '}']
+    for pos in reversed(positions):
+        candidate = raw[:pos + 1]
         open_braces = candidate.count('{') - candidate.count('}')
         open_brackets = candidate.count('[') - candidate.count(']')
         if open_braces < 0 or open_brackets < 0:
             continue
-        candidate += '}' * open_braces + ']' * open_brackets
-        # Try adding the minimum closing to make valid JSON
-        for suffix in ['', '}', ']}', ']}}}', ']}]}}']:
-            try:
-                result = json.loads(candidate + suffix)
-                if isinstance(result, dict):
-                    result.setdefault('summary', '')
-                    result.setdefault('suspicious', [])
-                    result.setdefault('categories', {})
-                    result.setdefault('transactions', [])
-                    return result
-            except json.JSONDecodeError:
-                continue
+        closing = ']' * open_brackets + '}' * open_braces
+        try:
+            result = json.loads(candidate + closing)
+            if isinstance(result, dict):
+                result.setdefault('summary', '')
+                result.setdefault('suspicious', [])
+                result.setdefault('categories', {})
+                result.setdefault('transactions', [])
+                return result
+        except json.JSONDecodeError:
+            continue
     return None
