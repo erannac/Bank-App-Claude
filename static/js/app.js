@@ -19,6 +19,8 @@ const errorSection = document.getElementById('error-section');
 const errorText    = document.getElementById('error-text');
 
 let selectedFiles = [];
+let pollTimer = null;
+let currentReportId = null;
 
 // ── Drag & Drop ────────────────────────────────────────────────────────────
 
@@ -95,45 +97,69 @@ async function startAnalysis() {
   hide(resultsSection);
   hide(errorSection);
   show(progressSection);
-  setProgress(20, 'מעלה קבצים...');
+  setProgress(15, 'מעלה קבצים...');
   analyzeBtn.disabled = true;
   btnLabel.textContent = 'מנתח...';
-
-  // Animate progress bar while waiting (server does everything synchronously)
-  let pct = 20;
-  const ticker = setInterval(() => {
-    pct = Math.min(pct + 2, 88);
-    setProgress(pct, 'מנתח תנועות עם Claude AI...');
-  }, 3000);
 
   const form = new FormData();
   selectedFiles.forEach(f => form.append('files', f));
 
+  let reportId;
   try {
     const res = await fetch('/upload', { method: 'POST', body: form });
     const data = await res.json();
-    clearInterval(ticker);
-    if (!res.ok || data.error) throw new Error(data.error || 'שגיאה בניתוח');
-
-    setProgress(100, 'הניתוח הושלם!');
-    setTimeout(() => {
-      hide(progressSection);
-      showResults(data);
-    }, 600);
+    if (!res.ok || data.error) throw new Error(data.error || 'שגיאה בהעלאה');
+    reportId = data.report_id;
+    currentReportId = reportId;
   } catch (err) {
-    clearInterval(ticker);
     showError(err.message);
+    return;
   }
+
+  setProgress(35, 'מנתח תנועות עם Claude AI...');
+
+  let pollCount = 0;
+  pollTimer = setInterval(async () => {
+    pollCount++;
+    try {
+      const res = await fetch(`/status/${reportId}`);
+      const data = await res.json();
+
+      if (data.status === 'done') {
+        clearInterval(pollTimer);
+        setProgress(100, 'הניתוח הושלם!');
+        setTimeout(() => {
+          hide(progressSection);
+          showResults(data, reportId);
+        }, 600);
+      } else if (data.status === 'error') {
+        clearInterval(pollTimer);
+        showError(data.error || 'שגיאה בניתוח');
+      } else {
+        // Still processing — advance bar slowly
+        const bar = parseInt(progressBar.style.width, 10);
+        if (bar < 90) setProgress(bar + 3, 'מנתח תנועות עם Claude AI...');
+
+        // Give up after 3 minutes
+        if (pollCount > 90) {
+          clearInterval(pollTimer);
+          showError('הניתוח ארך יותר מדי — אנא נסה שנית');
+        }
+      }
+    } catch {
+      // Network hiccup — keep polling
+    }
+  }, 2000);
 }
 
 // ── Results ────────────────────────────────────────────────────────────────
 
-function showResults(data) {
+function showResults(data, reportId) {
   summaryText.textContent = data.summary || 'הניתוח הושלם בהצלחה.';
 
   statsRow.innerHTML = `
     <div class="stat-card">
-      <div class="stat-value text-red-400">${data.suspicious_count}</div>
+      <div class="stat-value text-red-400">${data.suspicious_count ?? 0}</div>
       <div class="stat-label">ממצאים חשודים</div>
     </div>
     <div class="stat-card">
@@ -141,9 +167,7 @@ function showResults(data) {
       <div class="stat-label">הדוח מוכן להורדה</div>
     </div>`;
 
-  downloadBtn.onclick = () => {
-    window.location.href = `/download/${data.report_id}`;
-  };
+  downloadBtn.onclick = () => { window.location.href = `/download/${reportId}`; };
 
   show(resultsSection);
   analyzeBtn.disabled = false;
@@ -158,6 +182,7 @@ function setProgress(pct, label) {
 }
 
 function showError(msg) {
+  clearInterval(pollTimer);
   hide(progressSection);
   errorText.textContent = msg;
   show(errorSection);

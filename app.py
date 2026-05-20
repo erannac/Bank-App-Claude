@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
+from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
 from analyzer import analyze_statements
@@ -70,8 +70,8 @@ def _cleanup_old() -> None:
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    print(f"[APP] unhandled exception: {e}")
-    return jsonify({"error": f"שגיאת שרת: {type(e).__name__}: {e}"}), 500
+    print(f"[APP] unhandled: {e}")
+    return jsonify({"error": f"שגיאת שרת: {e}"}), 500
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -107,8 +107,7 @@ def upload():
         shutil.rmtree(upload_dir, ignore_errors=True)
         return jsonify({"error": "לא נמצאו קבצים תקינים (PDF / Excel / CSV)"}), 400
 
-    result_box: dict = {}
-    done_event = threading.Event()
+    _write_status(report_id, {"status": "processing"})
 
     def worker() -> None:
         try:
@@ -119,49 +118,36 @@ def upload():
             analysis = analyze_statements(parsed)
             report_path = os.path.join(upload_dir, "report.xlsx")
             generate_report(analysis, report_path)
-            data = {
+            _write_status(report_id, {
                 "status": "done",
-                "report_id": report_id,
                 "summary": analysis.get("summary", ""),
                 "suspicious_count": len(analysis.get("suspicious", [])),
-            }
-            _write_status(report_id, data)
-            result_box["ok"] = data
+            })
             print(f"[APP] {report_id[:8]} done")
         except Exception as exc:
             print(f"[APP] {report_id[:8]} error: {exc}")
-            result_box["err"] = str(exc)
-            shutil.rmtree(upload_dir, ignore_errors=True)
-        finally:
-            done_event.set()
+            _write_status(report_id, {"status": "error", "error": str(exc)})
 
-    # daemon=False so the thread isn't killed during gunicorn graceful shutdown
     threading.Thread(target=worker, daemon=False).start()
+    return jsonify({"report_id": report_id})
 
-    def stream():
-        # Send a newline every 5 s to keep the connection alive through proxies
-        while not done_event.wait(timeout=5):
-            yield b"\n"
-        if "err" in result_box:
-            yield json.dumps({"error": result_box["err"]}, ensure_ascii=False).encode()
-        else:
-            yield json.dumps(result_box["ok"], ensure_ascii=False).encode()
 
-    return Response(
-        stream_with_context(stream()),
-        content_type="application/json; charset=utf-8",
-        headers={"X-Accel-Buffering": "no"},
-    )
+@app.route("/status/<report_id>")
+def status(report_id: str):
+    job = _read_status(report_id)
+    if job is None:
+        return jsonify({"status": "processing"}), 200
+    return jsonify(job)
 
 
 @app.route("/download/<report_id>")
 def download(report_id: str):
     job = _read_status(report_id)
     if job is None or job.get("status") != "done":
-        return jsonify({"error": "לא נמצא"}), 404
+        return jsonify({"error": "הדוח אינו מוכן"}), 404
     report_path = os.path.join(_job_dir(report_id), "report.xlsx")
     if not os.path.exists(report_path):
-        return jsonify({"error": "קובץ הדוח לא נמצא"}), 404
+        return jsonify({"error": "קובץ לא נמצא"}), 404
     return send_file(
         report_path,
         as_attachment=True,
